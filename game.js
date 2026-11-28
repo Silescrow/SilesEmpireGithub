@@ -171,7 +171,7 @@ async function start(sv){
   const loop = now => {
     if(!G || !G.running) return;
     if(G.inMenu){ last = now; G.raf = requestAnimationFrame(loop); return; }
-    const dt = clamp((now-last)/1000, 0, .05); fpsTick(now); last = now; G.pfDeadline = performance.now() + 4;
+    const dt = clamp((now-last)/1000, 0, .05); fpsTick(now); last = now; G.pfDeadline = performance.now() + 6; G.pfLeft = 4;   // pro Bild: 6 ms Wegsuche, aber immer mindestens 4 Wege – sonst bleiben bei vielen Leuten welche stehen (V2.29)
     if(!G.paused) update(dt);
     render();
     G.raf = requestAnimationFrame(loop);
@@ -3503,10 +3503,11 @@ function lineFree(x0,z0,x1,z1){
 // Wegsuche mit Zeitbudget pro Bild: viele Befehle auf einmal lassen das Spiel nicht mehr ruckeln
 function moveTo(u,x,z){
   u.pathEnd=false;
-  if(!G.pfDeadline || performance.now() < G.pfDeadline){ u.pfWait=null; u.path = findPath(u.x,u.z,x,z); u.pi=0;
+  if(!G.pfDeadline || performance.now() < G.pfDeadline || G.pfLeft>0){ G.pfLeft--; u.pfWait=null; u.path = findPath(u.x,u.z,x,z); u.pi=0;
     // kein Weg / kein Fortschritt: eingeklemmt – Notweg durch die Lücken
     if((!u.path || !u.path.length || pathStuck(u,x,z)) && Math.hypot(x-u.x,z-u.z)>1.5){ const p2=findPath(u.x,u.z,x,z,true); if(p2 && p2.length){ u.path=p2; u.pi=0; } }
     return !!u.path; }
+  if(!u.pfWait) (G.pfQ||(G.pfQ=[])).push(u);   // Warteschlange: wer zuerst wartet, kommt zuerst dran
   u.pfWait={x,z}; u.path=null; u.pi=0; return true;
 }
 function cmdMove(u,x,z,used){ [x,z]=freeSpot(x,z,used); u.state='move'; u.target=null; u.site=null; u.goal={x,z,tries:0}; moveTo(u,x,z); }
@@ -3596,7 +3597,6 @@ function updateWorker(u,dt){
   // aus: eigene Bauern ohne Auftrag bleiben ganz still stehen (kein Herumlaufen, kein Hüttenbesuch)
   else if(false && u.kind==='worker' && u.ageSt!=='greis' && u.owner===0 && u.state==='idle' && !u.hold && !u.pin && !u.auto && !u.homeless){ if(u.lifeT==null) u.lifeT=10+G.rand()*14; u.lifeT-=dt*(badWeather()?2:1); if(u.lifeT<=0){ u.lifeT=null; idleLife(u); } }
   else if(u.homeless && u.kind==='worker' && u.state!=='idle' && u.state!=='move'){ u.state='idle'; u.path=null; }
-  if(u.pfWait && performance.now() < G.pfDeadline){ const w=u.pfWait; u.pfWait=null; moveTo(u,w.x,w.z); }
   // Wächter: hat der Bauer einen Auftrag, kommt aber 4 s nicht vom Fleck, sucht er einen Notweg heraus
   if(!u.inside && (u.state==='move'||u.state==='gather'||u.state==='build'||u.state==='hunt'||u.state==='drop'||u.state==='gohome'||u.state==='haul')){
     u.wT=(u.wT||0)+dt; if(u.wT>4){ const moved=u.wx==null || Math.hypot(u.x-u.wx,u.z-u.wz)>.6; u.wx=u.x; u.wz=u.z; u.wT=0;
@@ -4004,6 +4004,9 @@ function updateAIWar(p, mine, tc){
    ============================================================ */
 function update(dt){
   pcUpdate(dt);
+  // Wege der Reihe nach berechnen (fair, auch bei Hunderten Leuten)
+  if(G.pfQ && G.pfQ.length){ let n=0; while(G.pfQ.length && (performance.now()<G.pfDeadline || G.pfLeft>0) && n<60){ const u=G.pfQ.shift(); n++; if(!u.pfWait || u.dead) continue; const w=u.pfWait; u.pfWait=null; G.pfLeft--; u.path=findPath(u.x,u.z,w.x,w.z); u.pi=0;
+      if((!u.path || !u.path.length || pathStuck(u,w.x,w.z)) && Math.hypot(w.x-u.x,w.z-u.z)>1.5){ const p2=findPath(u.x,u.z,w.x,w.z,true); if(p2 && p2.length){ u.path=p2; u.pi=0; } } } }
   updateRegrow(dt);
   // Musik: bei Kämpfen „Valley of the War Horns“, 20 s nach dem letzten Treffer wieder ruhige Lieder
   { const war = G.fightT!=null && G.t-G.fightT<20; if(war!==!!G.warMusic && !G.inMenu){ G.warMusic=war; EE.music(war?'war':'calm'); } }
